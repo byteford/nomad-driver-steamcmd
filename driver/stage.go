@@ -74,6 +74,12 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
+	// Keep the source's permissions (a 0600 secret must not become 0644, a
+	// script must keep its exec bit).
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -92,7 +98,7 @@ func copyFile(src, dst string) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, st.Mode().Perm()); err != nil {
 		os.Remove(tmpName)
 		return err
 	}
