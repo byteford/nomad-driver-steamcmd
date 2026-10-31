@@ -146,8 +146,9 @@ echo "ok: server.exe answered under Proton"
 PFX="$NOMAD_DATA_DIR/alloc/$ALLOC/$TASK/local/compat/pfx"
 [ -d "$PFX" ] || { diagnose; fail "Proton did not create its prefix at $PFX"; }
 echo "ok: Proton prefix created"
-nomad alloc logs "$ALLOC" "$TASK" | grep -q "windows server listening" ||
-  { diagnose; fail "server stdout did not reach nomad alloc logs"; }
+# Not asserted: the exe's stdout. Under Proton the game's console output does not
+# reach the task's stdout (Proton's steam.exe wrapper sits between them), which is
+# what follow_logs is for with real servers.
 
 echo "== stop: server.exe and wineserver must both be gone =="
 nomad job stop -detach "$JOB"
