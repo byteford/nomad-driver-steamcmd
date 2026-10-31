@@ -33,6 +33,7 @@ trap cleanup EXIT
 diagnose() {
   dump_alloc "$ALLOC" "$TASK"
   echo "--- install_dir ---"
+  stat -c '%U:%G %a %n' "$INSTALL" 2>&1 || true
   ls -la "$INSTALL" 2>&1 | head -40 || true
   echo "--- server binaries ---"
   find "$INSTALL" -maxdepth 2 \( -name 'hlds_*' -o -name 'steam_appid.txt' -o -name '*.acf' \) 2>&1 | head -20 || true
@@ -43,18 +44,22 @@ diagnose() {
   echo "protected_regular=$(cat /proc/sys/fs/protected_regular 2>/dev/null || echo n/a)"
 }
 
-# Steam's client IPC lives in /dev/shm/u*-ValveIPCSharedObj-Steam. On a CI
-# runner an earlier steamcmd run as another user leaves one behind that the
-# agent (root) cannot reopen (fs.protected_regular), and HLDS then dies with
-# "Unable to initialize Steam". A real node runs everything as one user, so
-# clear them to test the driver rather than the runner.
-echo "--- /dev/shm before ---"
-ls -la /dev/shm 2>&1 | head -20 || true
-rm -f /dev/shm/u*-ValveIPCSharedObj-Steam 2>/dev/null || sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam 2>/dev/null || true
+# Steam's client IPC lives in /dev/shm/u*-ValveIPCSharedObj-Steam. Stale ones
+# left by an earlier steamcmd run as another user (the runner's own, from the
+# workflow's steamcmd install step) cannot be reopened by the root agent
+# (fs.protected_regular) and HLDS then dies with "Unable to initialize Steam".
+# A real node runs everything as one user. Only touched on CI runners.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "--- /dev/shm before ---"
+  ls -la /dev/shm 2>&1 | head -20 || true
+  sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam || true
+fi
 
-rm -rf "$GAME_ROOT"
-mkdir -p "$INSTALL"
-chmod -R a+rwX "$GAME_ROOT"
+# install_dir itself is deliberately NOT pre-created: the driver creates it as
+# the agent user, so ownership matches a real node (everything owned by the
+# user the agent runs as).
+rm -rf "$GAME_ROOT" 2>/dev/null || sudo rm -rf "$GAME_ROOT"
+mkdir -p "$GAME_ROOT"
 
 cat >"$GAME_ROOT/job.nomad.hcl" <<EOF
 job "$JOB" {
