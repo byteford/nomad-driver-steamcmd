@@ -48,22 +48,22 @@ diagnose() {
   echo "protected_regular=$(cat /proc/sys/fs/protected_regular 2>/dev/null || echo n/a)"
 }
 
-# Steam's client IPC lives in /dev/shm/u*-ValveIPCSharedObj-Steam. Stale ones
-# left by an earlier steamcmd run as another user (the runner's own, from the
-# workflow's steamcmd install step) cannot be reopened by the root agent
-# (fs.protected_regular) and HLDS then dies with "Unable to initialize Steam".
-# A real node runs everything as one user. Only touched on CI runners.
-if [ -n "${GITHUB_ACTIONS:-}" ]; then
-  echo "--- /dev/shm before ---"
-  ls -la /dev/shm 2>&1 | head -20 || true
-  sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam || true
-fi
-
-# install_dir itself is deliberately NOT pre-created: the driver creates it as
-# the agent user, so ownership matches a real node (everything owned by the
-# user the agent runs as).
+# CI runner quirk, not a driver behaviour: the workflow starts the agent with
+# `sudo -E`, so HOME stays /home/runner and steamcmd (even though the agent is
+# root) acts as the runner user -- observed: it cannot create steamapps/ in a
+# root-owned install_dir, silently installs into ~/.local/share/Steam instead
+# and still prints "Success!". The launched server runs as root, and the Steam
+# IPC file steamcmd leaves in /dev/shm is then owned by runner, which root may
+# not reopen under fs.protected_regular=2 ("Unable to initialize Steam"). So on
+# CI: make install_dir runner-writable and relax that sysctl. A real node runs
+# steamcmd and the server as one user.
 rm -rf "$GAME_ROOT" 2>/dev/null || sudo rm -rf "$GAME_ROOT"
-mkdir -p "$GAME_ROOT"
+mkdir -p "$INSTALL"
+chmod -R a+rwX "$GAME_ROOT"
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  sudo sysctl -w fs.protected_regular=0
+  sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam
+fi
 
 cat >"$GAME_ROOT/job.nomad.hcl" <<EOF
 job "$JOB" {
@@ -123,6 +123,10 @@ for _ in $(seq 1 900); do
 done
 [ "$state" = running ] || { echo "::error::task not running after 900s (state: $state)"; diagnose; exit 1; }
 echo "ok: task running (install finished, server launched)"
+# steamcmd prints "Success!" even when it installed somewhere else, so check
+# that the install really landed in install_dir.
+[ -s "$INSTALL/steamapps/appmanifest_$APP_ID.acf" ] ||
+  { diagnose; fail "steamcmd reported success but install_dir has no appmanifest_$APP_ID.acf"; }
 
 echo "== the game server must answer a Source query =="
 # Poll for the reply, but give up as soon as the task has died.
