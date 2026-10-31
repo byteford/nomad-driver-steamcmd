@@ -291,7 +291,9 @@ do the download and the main task only runs the server:
 
 1. `install` (prestart): `app_id` + `install_dir`, no `launch` -- downloads and exits.
 2. `server` (main): `launch` only. With `update_on_start = false` (the default)
-   and a populated `install_dir`, steamcmd is skipped entirely.
+   and the app already installed in `install_dir` (steamcmd's `steamapps/appmanifest_<app_id>.acf`
+   says so), steamcmd is skipped entirely. An `install_dir` that merely contains files, such as
+   leftovers of a failed first install, does not count.
 
 Both tasks must point at the same storage: use a `volume_mount` (see
 "Volumes") with the same `install_dir`/`compat_data_path`, or an absolute
