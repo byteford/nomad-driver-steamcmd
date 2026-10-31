@@ -457,6 +457,8 @@ func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) e
 	if signal != "" {
 		if s, err := parseSignal(signal); err == nil {
 			sig = s
+		} else {
+			d.logger.Warn("unsupported kill signal, falling back to SIGTERM", "task_id", taskID, "signal", signal, "error", err)
 		}
 	}
 
@@ -706,6 +708,8 @@ func parseSignal(s string) (syscall.Signal, error) {
 		return syscall.SIGINT, nil
 	case "SIGHUP", "HUP":
 		return syscall.SIGHUP, nil
+	case "SIGQUIT", "QUIT":
+		return syscall.SIGQUIT, nil
 	case "SIGUSR1", "USR1":
 		return syscall.SIGUSR1, nil
 	case "SIGUSR2", "USR2":
