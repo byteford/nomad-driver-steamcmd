@@ -556,7 +556,10 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-That's the whole process — the workflow handles the rest. To test a build
+That's the whole process — the workflow handles the rest. The release
+workflow first runs the full `e2e.yml` (real Nomad + steamcmd) against the
+tagged commit; if it fails, nothing is published. Re-run the failed workflow
+once the cause is fixed, or delete and re-push the tag. To test a build
 locally first (e.g. directly on the Pi) without waiting on CI:
 
 ```sh

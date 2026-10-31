@@ -9,6 +9,13 @@ permissions:
   contents: write
 
 jobs:
+  # Full end-to-end run (real Nomad + steamcmd) on the tagged commit. The
+  # release job below needs it, so a failing e2e blocks publishing.
+  e2e:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/e2e.yml
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -74,7 +81,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: build
+    needs: [build, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
