@@ -38,7 +38,19 @@ diagnose() {
   find "$INSTALL" -maxdepth 2 \( -name 'hlds_*' -o -name 'steam_appid.txt' -o -name '*.acf' \) 2>&1 | head -20 || true
   echo "--- processes ---"
   pgrep -a 'hlds' || true
+  echo "--- /dev/shm ---"
+  ls -la /dev/shm 2>&1 | head -20 || true
+  echo "protected_regular=$(cat /proc/sys/fs/protected_regular 2>/dev/null || echo n/a)"
 }
+
+# Steam's client IPC lives in /dev/shm/u*-ValveIPCSharedObj-Steam. On a CI
+# runner an earlier steamcmd run as another user leaves one behind that the
+# agent (root) cannot reopen (fs.protected_regular), and HLDS then dies with
+# "Unable to initialize Steam". A real node runs everything as one user, so
+# clear them to test the driver rather than the runner.
+echo "--- /dev/shm before ---"
+ls -la /dev/shm 2>&1 | head -20 || true
+rm -f /dev/shm/u*-ValveIPCSharedObj-Steam 2>/dev/null || sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam 2>/dev/null || true
 
 rm -rf "$GAME_ROOT"
 mkdir -p "$INSTALL"
@@ -92,7 +104,20 @@ running() { [ "$(task_field "$ALLOC" "$TASK" State)" = running ]; }
 wait_for "task running (install finished, server launched)" 900 running || { diagnose; exit 1; }
 
 echo "== the game server must answer a Source query =="
-wait_for "server answers A2S_INFO on udp/$PORT" 180 udp_query "$PORT" "$A2S_INFO" || { diagnose; exit 1; }
+# Poll for the reply, but give up as soon as the task has died.
+answered=false
+for _ in $(seq 1 180); do
+  if udp_query "$PORT" "$A2S_INFO" >/dev/null 2>&1; then answered=true; break; fi
+  state=$(task_field "$ALLOC" "$TASK" State)
+  if [ "$state" != running ]; then
+    echo "::error::task left the running state (now: $state) before the server answered"
+    diagnose
+    exit 1
+  fi
+  sleep 1
+done
+$answered || { echo "::error::no A2S_INFO reply from udp/$PORT within 180s"; diagnose; exit 1; }
+echo "ok: server answers A2S_INFO on udp/$PORT"
 REPLY=$(udp_query "$PORT" "$A2S_INFO")
 case "$REPLY" in
   ffffffff*) echo "server replied: ${REPLY:0:60}..." ;;
