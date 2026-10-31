@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Called by release.yml so a tag cannot publish unless this passes.
+  workflow_call:
 
 permissions:
   contents: read
