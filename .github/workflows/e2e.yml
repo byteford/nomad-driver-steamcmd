@@ -193,6 +193,23 @@ jobs:
             exit 1
           fi
 
+          # A healthy driver does not mean the node is schedulable yet: a job
+          # submitted while the node is still "initializing" fails with "No
+          # nodes were eligible for evaluation" (seen on a CI run).
+          for i in $(seq 1 30); do
+            node=$(curl -s http://127.0.0.1:4646/v1/nodes | jq -r '.[0] | "\(.Status)/\(.SchedulingEligibility)"')
+            echo "node: $node"
+            if [ "$node" = "ready/eligible" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ "$node" != "ready/eligible" ]; then
+            echo "::error::node never became ready and eligible (last: $node)"
+            cat /tmp/nomad.log
+            exit 1
+          fi
+
           echo "--- steamcmd plugin config as loaded by SetConfig ---"
           grep "steamcmd plugin config loaded" /tmp/nomad.log || echo "::warning::no SetConfig log line found -- driver may not have logged it as expected"
 
