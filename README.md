@@ -102,7 +102,7 @@ config {
   platform        = ""               # "windows", "macos", or "linux" -- see below
   windows_display = false            # wrap with xvfb-run --auto-servernum; only with platform="windows"
   update_on_start = true             # re-run steamcmd before every launch
-  install_timeout = "20m"            # optional, Go duration string
+  install_timeout = "20m"            # optional, positive Go duration; an invalid value fails the start
   repair_stale_manifest = false      # see "Stale app manifest" below
 
   # Sets WINEPREFIX for the launched process; overrides the plugin-level
