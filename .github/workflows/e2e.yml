@@ -21,7 +21,7 @@ env:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -551,6 +551,12 @@ jobs:
         # Real steamcmd install, then the real server binary through the
         # driver, proven by a UDP A2S_INFO reply. See e2e/gameserver-hlds.sh.
         run: bash e2e/gameserver-hlds.sh
+
+      - name: Windows server starts under real Proton (GE-Proton, no Steam)
+        # Downloads a pinned GE-Proton (sha512-checked against the release's
+        # own checksum file), cross-compiles a tiny Windows server and runs it
+        # with platform=windows / runner=proton. See e2e/gameserver-proton.sh.
+        run: bash e2e/gameserver-proton.sh
 
       - name: Collect logs
         if: always()
