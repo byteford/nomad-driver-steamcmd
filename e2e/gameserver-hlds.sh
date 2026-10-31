@@ -63,6 +63,17 @@ chmod -R a+rwX "$GAME_ROOT"
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
   sudo sysctl -w fs.protected_regular=0
   sudo rm -f /dev/shm/u*-ValveIPCSharedObj-Steam
+  # GoldSrc/Source servers load ~/.steam/sdk32/steamclient.so and die with
+  # "Unable to initialize Steam" without it. Standard one-time server setup
+  # (steamcmd's own copy), done here because the runner has no Steam install.
+  for sc in "$HOME/.local/share/Steam/steamcmd/linux32/steamclient.so" "$HOME/.steam/steamcmd/linux32/steamclient.so"; do
+    if [ -f "$sc" ]; then
+      mkdir -p "$HOME/.steam/sdk32"
+      ln -sf "$sc" "$HOME/.steam/sdk32/steamclient.so"
+      echo "linked $sc -> ~/.steam/sdk32/steamclient.so"
+      break
+    fi
+  done
 fi
 
 cat >"$GAME_ROOT/job.nomad.hcl" <<EOF
