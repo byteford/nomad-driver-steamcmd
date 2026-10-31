@@ -6,29 +6,6 @@ import (
 	"testing"
 )
 
-func TestResolveWinePrefix(t *testing.T) {
-	cases := []struct {
-		name   string
-		task   string
-		plugin string
-		want   string
-	}{
-		{"task overrides plugin when both set", "/root/.wine-task", "/root/.wine-plugin", "/root/.wine-task"},
-		{"falls back to plugin when task unset", "", "/root/.wine-plugin", "/root/.wine-plugin"},
-		{"empty when neither set", "", "", ""},
-		{"task alone with no plugin default", "/root/.wine-task", "", "/root/.wine-task"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveWinePrefix(tc.task, tc.plugin)
-			if got != tc.want {
-				t.Errorf("resolveWinePrefix(%q, %q) = %q, want %q", tc.task, tc.plugin, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestBuildLaunchCommand(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -47,23 +24,25 @@ func TestBuildLaunchCommand(t *testing.T) {
 			wantArgs:    []string{"-port=8211"},
 		},
 		{
-			name: "windows platform wraps with wine, no display",
+			name: "windows platform wraps with <proton>/proton run, no display",
 			cfg: TaskConfig{
 				Platform: "windows",
 				Launch:   &LaunchConfig{Command: "FoundryDedicatedServer.exe", Args: []string{"-batchmode", "-nographics"}},
 			},
-			wantCommand: "wine",
-			wantArgs:    []string{"FoundryDedicatedServer.exe", "-batchmode", "-nographics"},
+			rt:          windowsRuntime{ProtonPath: "/opt/GE-Proton9-20"},
+			wantCommand: "/opt/GE-Proton9-20/proton",
+			wantArgs:    []string{"run", "FoundryDedicatedServer.exe", "-batchmode", "-nographics"},
 		},
 		{
-			name: "windows platform with windows_display wraps with xvfb-run --auto-servernum wine",
+			name: "windows platform with windows_display nests proton under xvfb-run --auto-servernum",
 			cfg: TaskConfig{
 				Platform:       "windows",
 				WindowsDisplay: true,
 				Launch:         &LaunchConfig{Command: "FoundryDedicatedServer.exe", Args: []string{"-batchmode", "-nographics"}},
 			},
+			rt:          windowsRuntime{ProtonPath: "/opt/GE-Proton9-20"},
 			wantCommand: "xvfb-run",
-			wantArgs:    []string{"--auto-servernum", "wine", "FoundryDedicatedServer.exe", "-batchmode", "-nographics"},
+			wantArgs:    []string{"--auto-servernum", "/opt/GE-Proton9-20/proton", "run", "FoundryDedicatedServer.exe", "-batchmode", "-nographics"},
 		},
 		{
 			name: "windows platform, no launch args at all",
@@ -71,8 +50,9 @@ func TestBuildLaunchCommand(t *testing.T) {
 				Platform: "windows",
 				Launch:   &LaunchConfig{Command: "server.exe"},
 			},
-			wantCommand: "wine",
-			wantArgs:    []string{"server.exe"},
+			rt:          windowsRuntime{ProtonPath: "/opt/GE-Proton9-20"},
+			wantCommand: "/opt/GE-Proton9-20/proton",
+			wantArgs:    []string{"run", "server.exe"},
 		},
 		{
 			name: "proton runner wraps with <proton>/proton run",
@@ -80,7 +60,7 @@ func TestBuildLaunchCommand(t *testing.T) {
 				Platform: "windows",
 				Launch:   &LaunchConfig{Command: "server.exe", Args: []string{"-batchmode"}},
 			},
-			rt:          windowsRuntime{Runner: "proton", ProtonPath: "/opt/GE-Proton9-20"},
+			rt:          windowsRuntime{ProtonPath: "/opt/GE-Proton9-20"},
 			wantCommand: "/opt/GE-Proton9-20/proton",
 			wantArgs:    []string{"run", "server.exe", "-batchmode"},
 		},
@@ -91,7 +71,7 @@ func TestBuildLaunchCommand(t *testing.T) {
 				WindowsDisplay: true,
 				Launch:         &LaunchConfig{Command: "server.exe"},
 			},
-			rt:          windowsRuntime{Runner: "proton", ProtonPath: "/opt/GE-Proton9-20/proton"},
+			rt:          windowsRuntime{ProtonPath: "/opt/GE-Proton9-20/proton"},
 			wantCommand: "xvfb-run",
 			wantArgs:    []string{"--auto-servernum", "/opt/GE-Proton9-20/proton", "run", "server.exe"},
 		},
