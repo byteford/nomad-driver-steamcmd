@@ -524,6 +524,17 @@ jobs:
 
           nomad job stop -purge "$job_id" || true
 
+      - name: Game server lifecycle (stand-in server, no Steam)
+        # Starts, queries, crashes (Nomad must restart it), then stops a
+        # stand-in server through the full Nomad -> driver path. See
+        # e2e/gameserver-fake.sh.
+        run: bash e2e/gameserver-fake.sh
+
+      - name: Real game server starts and answers a query (HLDS, app 90)
+        # Real steamcmd install, then the real server binary through the
+        # driver, proven by a UDP A2S_INFO reply. See e2e/gameserver-hlds.sh.
+        run: bash e2e/gameserver-hlds.sh
+
       - name: Collect logs
         if: always()
         run: |
