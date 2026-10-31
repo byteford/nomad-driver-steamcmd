@@ -39,6 +39,10 @@ diagnose() {
   find "$INSTALL" -maxdepth 2 \( -name 'hlds_*' -o -name 'steam_appid.txt' -o -name '*.acf' \) 2>&1 | head -20 || true
   echo "--- processes ---"
   pgrep -a 'hlds' || true
+  echo "--- steam client state ---"
+  ls -la "$HOME/.local/share/Steam/steamapps" 2>&1 | head -20 || true
+  tail -n 40 "$HOME/.local/share/Steam/logs/content_log.txt" 2>&1 || true
+  ps -eo user,pid,args | grep -E '[n]omad agent' || true
   echo "--- /dev/shm ---"
   ls -la /dev/shm 2>&1 | head -20 || true
   echo "protected_regular=$(cat /proc/sys/fs/protected_regular 2>/dev/null || echo n/a)"
@@ -105,8 +109,20 @@ nomad job run -detach "$GAME_ROOT/job.nomad.hcl"
 have_alloc() { [ -n "$(latest_alloc "$JOB")" ]; }
 wait_for "allocation exists" 30 have_alloc
 ALLOC=$(latest_alloc "$JOB")
-running() { [ "$(task_field "$ALLOC" "$TASK" State)" = running ]; }
-wait_for "task running (install finished, server launched)" 900 running || { diagnose; exit 1; }
+# Wait for the task to be running; give up at once if it dies (a failed launch
+# leaves the task dead, which would otherwise burn the whole timeout).
+for _ in $(seq 1 900); do
+  state=$(task_field "$ALLOC" "$TASK" State)
+  [ "$state" = running ] && break
+  if [ "$state" = dead ]; then
+    echo "::error::task died before reaching running"
+    diagnose
+    exit 1
+  fi
+  sleep 1
+done
+[ "$state" = running ] || { echo "::error::task not running after 900s (state: $state)"; diagnose; exit 1; }
+echo "ok: task running (install finished, server launched)"
 
 echo "== the game server must answer a Source query =="
 # Poll for the reply, but give up as soon as the task has died.
