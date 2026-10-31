@@ -30,7 +30,9 @@ trap cleanup EXIT
 # An "installed" app: steamcmd leaves steamapps/appmanifest_<id>.acf behind.
 rm -rf "$GAME_ROOT"
 mkdir -p "$INSTALL/steamapps"
-echo '"AppState" { "appid" "'"$APP_ID"'" }' >"$INSTALL/steamapps/appmanifest_${APP_ID}.acf"
+# StateFlags 4 = fully installed, which is what the driver checks before it
+# skips steamcmd.
+printf '"AppState"\n{\n\t"appid"\t\t"%s"\n\t"StateFlags"\t\t"4"\n}\n' "$APP_ID" >"$INSTALL/steamapps/appmanifest_${APP_ID}.acf"
 chmod -R a+rwX "$GAME_ROOT"
 
 cat >"$GAME_ROOT/job.nomad.hcl" <<EOF
