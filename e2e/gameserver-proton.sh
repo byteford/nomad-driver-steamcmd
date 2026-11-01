@@ -3,7 +3,7 @@
 #
 # Downloads a pinned GE-Proton, cross-compiles a tiny Windows UDP server
 # (e2e/winserver.c, a real PE executable), and runs it with
-# platform = "windows" / runner = "proton" exactly as a production Windows
+# platform = "windows" (Proton is the only Windows runner) exactly as a production Windows
 # server is run. Passes only if the .exe itself answers over UDP, Proton created
 # its prefix, and nothing (server.exe, wineserver) survives a stop.
 #
@@ -95,7 +95,6 @@ job "$JOB" {
         install_dir     = "$INSTALL"
         update_on_start = false
         platform        = "windows"
-        runner          = "proton"
         proton_path     = "$PROTON_DIR"
 
         launch {

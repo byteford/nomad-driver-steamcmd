@@ -628,36 +628,16 @@ func taskLogFiles(cfg *drivers.TaskConfig) (stdout, stderr *os.File, closeFn fun
 	return so, se, func() { so.Close(); se.Close() }, nil
 }
 
-// resolveWinePrefix applies task-overrides-plugin precedence for
-// WINEPREFIX -- the same pattern as login (resolveLogin): per-task
-// config wins when present, plugin config is the fleet-wide fallback.
-//
-// wine_prefix has both a plugin-level default_wine_prefix and a
-// task-level override deliberately: the prefix is genuinely a
-// client/host-level concern (a fixed filesystem path on a specific node,
-// usually shared across whatever Windows apps run there) as much as a
-// per-task one, but agent-level (plugin) config forwarding has a
-// confirmed history of not reaching SetConfig reliably on some Nomad
-// versions (see PluginConfig's doc comment) -- task-level config doesn't
-// have that problem, so it stays available as the safer choice if you're
-// not certain your Nomad version is unaffected.
-func resolveWinePrefix(task, plugin string) string {
-	if task != "" {
-		return task
-	}
-	return plugin
-}
-
 // buildLaunchCommand computes the actual command and args to execute,
-// automatically wrapping with wine (and optionally xvfb-run) when
+// automatically wrapping with Proton (and optionally xvfb-run) when
 // platform is "windows" -- so a job spec can write launch.command as the
 // Windows .exe directly, with its normal args, rather than needing to
-// know the exact `xvfb-run --auto-servernum wine <exe> <args>` wrapping
-// syntax and argument ordering.
+// know the exact `xvfb-run --auto-servernum <proton> run <exe> <args>`
+// wrapping syntax and argument ordering.
 //
 // windows_display defaults to false and is never auto-enabled just
 // because platform=="windows" -- confirmed in production this exact
-// wine+xvfb-run combination is what one specific app (FOUNDRY, 2915550)
+// Xvfb combination is what one specific app (FOUNDRY, 2915550)
 // needs, but plenty of Windows console apps genuinely don't need any
 // display at all. Forcing Xvfb unconditionally onto every windows-
 // platform task would reintroduce failure surface (stale display locks,
@@ -670,7 +650,7 @@ func buildLaunchCommand(cfg TaskConfig, rt windowsRuntime) (command string, args
 		return command, args
 	}
 
-	// Platform=="windows" always needs wine to execute the downloaded
+	// Platform=="windows" always needs Proton to execute the downloaded
 	// Windows binary on a Linux client -- unlike the display, this part
 	// is safe and correct to automate unconditionally.
 	runExe, runPre := rt.executable()

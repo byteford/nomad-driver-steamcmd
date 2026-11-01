@@ -59,7 +59,6 @@ job "foundry-proton" {
         app_id           = "2915550"
         platform         = "windows"
         install_dir      = "data/steamapp"
-        runner           = "proton"
         proton_path      = "/opt/GE-Proton9-20"
         compat_data_path = "data/compat"
         windows_display  = true # Unity app; still needs a display under Proton

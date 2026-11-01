@@ -84,7 +84,7 @@ func buildArgs(cfg TaskConfig, login LoginConfig, installDir string) ([]string, 
 	// depot steamcmd fetches, regardless of the host OS it's actually
 	// running on -- e.g. downloading the Windows build of a
 	// Windows-only dedicated server onto a Linux client, to then run
-	// under Wine. Without this, steamcmd silently installs nothing
+	// under Proton. Without this, steamcmd silently installs nothing
 	// useful for that platform: no error, just an install_dir containing
 	// only Steam's own runtime scaffolding and no actual app content.
 	if cfg.Platform != "" {

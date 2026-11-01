@@ -105,14 +105,8 @@ config {
   install_timeout = "20m"            # optional, positive Go duration; an invalid value fails the start
   repair_stale_manifest = false      # see "Stale app manifest" below
 
-  # Sets WINEPREFIX for the launched process; overrides the plugin-level
-  # default_wine_prefix if both are set; only meaningful with platform="windows"
-  wine_prefix = ""
-
-  # Windows runner (platform="windows" only). "wine" (default) or "proton" --
-  # see "Running Windows servers under Proton" below.
-  runner             = "wine"
-  proton_path        = ""   # Proton dir (contains `proton`); overrides default_proton_path
+  # Proton (platform="windows" only) -- see "Running Windows servers under Proton" below.
+  proton_path        = ""   # Proton dir (contains `proton`); required unless default_proton_path is set
   compat_data_path   = ""   # STEAM_COMPAT_DATA_PATH; default local/compat (per task)
   compat_client_path = ""   # STEAM_COMPAT_CLIENT_INSTALL_PATH; default ~/.steam/steam
 
@@ -142,7 +136,7 @@ config {
 it's worth being explicit about exactly how it works: a command
 containing a `/` and not already absolute (`local/steamapp/PalServer.sh`)
 is resolved against `install_dir`. A **bare** command with no `/` at all
-(`xvfb-run`, `wine`) is left untouched for a `$PATH` lookup instead --
+(`xvfb-run`) is left untouched for a `$PATH` lookup instead --
 this matters because a binary directly inside `install_dir` with no
 subdirectory (`command = "PalServer.sh"`, no `local/steamapp/` prefix)
 looks identical to a bare PATH-lookup command under this rule and will
@@ -152,8 +146,9 @@ this resolution only applies when `platform` isn't `"windows"` -- see below.
 
 **`launch.args` are passed through completely unmodified** -- none of the
 above applies to them, and this has *also* now bitten in production
-(`xvfb-run wine local/steamapp/FoundryDedicatedServer.exe`, failing with
-`wine: failed to open "local/steamapp/FoundryDedicatedServer.exe"`). The
+(`xvfb-run <proton> run local/steamapp/FoundryDedicatedServer.exe`, failing
+because the exe was looked up relative to `install_dir`, where that path does
+not exist). The
 launched process's working directory is always set to `install_dir`
 (regardless of whether `command` needed resolving against it), so any
 path-like value inside `args` is resolved by *the launched program
@@ -174,31 +169,33 @@ Steam's own runtime scaffolding (`steamclient.so`, `linux64/`,
 `steamapps/`) with no actual app content and no error.
 
 **When `platform = "windows"`, `launch.command`/`args` are automatically
-wrapped with `wine`** (and, if `windows_display = true`, additionally
-with `xvfb-run --auto-servernum`) -- write the `.exe` and its own
-arguments directly, the same as you would for a native Linux binary:
+wrapped with `<proton_path>/proton run`** (and, if `windows_display = true`,
+additionally with `xvfb-run --auto-servernum`) -- write the `.exe` and its own
+arguments directly, the same as you would for a native Linux binary. A Proton
+build is required: set `proton_path` on the task or `default_proton_path` in the
+plugin config (see "Running Windows servers under Proton" below).
 
 ```hcl
 config {
   app_id          = "2915550"
   platform        = "windows"
+  proton_path     = "/opt/GE-Proton9-20"
   windows_display = true                # only if the app actually needs a display -- see below
-  wine_prefix     = "/root/.wine-test"   # optional; sets WINEPREFIX for you
 
   launch {
     command = "FoundryDedicatedServer.exe"  # NOT "local/steamapp/..." -- same
                                              # resolution rule as launch.args above,
                                              # since this is really an argument to
-                                             # wine/xvfb-run once wrapped, not the
+                                             # proton/xvfb-run once wrapped, not the
                                              # actual exec target
     args    = ["-batchmode", "-nographics"]
   }
 }
 ```
 
-This expands internally to `wine FoundryDedicatedServer.exe -batchmode
--nographics` (working directory `install_dir`), or with
-`windows_display = true`, `xvfb-run --auto-servernum wine
+This expands internally to `/opt/GE-Proton9-20/proton run FoundryDedicatedServer.exe
+-batchmode -nographics` (working directory `install_dir`), or with
+`windows_display = true`, `xvfb-run --auto-servernum /opt/GE-Proton9-20/proton run
 FoundryDedicatedServer.exe -batchmode -nographics`. See
 `buildLaunchCommand` in `driver/lifecycle.go` for the exact logic.
 
@@ -208,14 +205,14 @@ combination is what one specific app (FOUNDRY) needs, but plenty of
 Windows console apps genuinely don't need any display at all (this
 driver's own Unity-specific troubleshooting confirmed `-batchmode
 -nographics` alone is *not* always sufficient either -- it reduces what
-the app does graphics-wise, but doesn't remove Wine's own need for a
+the app does graphics-wise, but doesn't remove Wine's (and so Proton's) own need for a
 display to exist at all, for apps that check). Forcing Xvfb
 unconditionally onto every Windows-platform task would reintroduce
 failure surface (stale display locks, an extra runtime dependency) this
 driver deliberately keeps opt-in. Check your specific app's own behavior
 before deciding whether you need it.
 
-Requires `wine` (and, if using `windows_display`, `xvfb-run`) installed on the client node (Wine because
+Requires a Proton build (and, if using `windows_display`, `xvfb-run`) installed on the client node (Proton because
 the server is a Windows binary; Xvfb because this particular server
 apparently wants a display even in "dedicated" mode -- confirmed working
 by the community for this app, not something this driver does anything
@@ -223,20 +220,19 @@ special for beyond getting the right binary downloaded in the first place).
 
 ### Running Windows servers under Proton
 
-Set `runner = "proton"` (per task, or `default_runner` fleet-wide) to run
-`platform = "windows"` tasks through a pinned [Proton](https://github.com/ValveSoftware/Proton)
-/ [GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom) build
-instead of whatever `wine` the distro ships. `wine` stays the default, so
-existing jobs are unaffected.
+`platform = "windows"` tasks run through a pinned [Proton](https://github.com/ValveSoftware/Proton)
+/ [GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom) build, set
+per task with `proton_path` or fleet-wide with `default_proton_path`. The
+driver does not support plain `wine`; use Proton (a task with
+`platform = "windows"` and no Proton path fails to start).
 
 ```hcl
 config {
   app_id           = "2915550"
   platform         = "windows"
-  runner           = "proton"
   proton_path      = "/opt/GE-Proton9-20"   # absolute; dir containing the `proton` script
   compat_data_path = "local/compat"         # default; Proton creates pfx/ underneath
-  windows_display  = true                   # still opt-in, same as wine
+  windows_display  = true                   # still opt-in
 
   launch {
     command = "FoundryDedicatedServer.exe"
@@ -249,8 +245,7 @@ This runs `<proton_path>/proton run FoundryDedicatedServer.exe ...` (wrapped
 in `xvfb-run --auto-servernum` if `windows_display`) and sets
 `STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH` (defaults to
 `~/.steam/steam` if it exists, else the compat dir), `STEAM_COMPAT_INSTALL_PATH`,
-`SteamAppId` and `SteamGameId`. `WINEPREFIX`/`wine_prefix` are **not** used
-with Proton -- the prefix is `<compat_data_path>/pfx`.
+`SteamAppId` and `SteamGameId`. The Wine prefix is `<compat_data_path>/pfx`.
 
 Install Proton on the client by unpacking a release tarball somewhere
 stable (e.g. `/opt/GE-Proton9-20`); the driver never downloads it.
@@ -263,8 +258,7 @@ e.g. `${NOMAD_ALLOC_DIR}/data/compat`.
 
 **Stopping.** `wineserver` daemonizes and escapes the task's process
 group, so after a stop/kill the driver also runs `wineserver -k` against the
-task's prefix (Proton's bundled `wineserver`, or the system one for the
-`wine` runner). This is persisted, so it also works for tasks recovered
+task's prefix (Proton's bundled `wineserver`). This is persisted, so it also works for tasks recovered
 after a client restart.
 
 ### Getting file-only server logs into `nomad alloc logs`
@@ -308,51 +302,31 @@ install_dir or any volume symlink exists. Render config to `local/` and use
 
 See `example/foundry-proton.nomad.hcl`.
 
-### Setting up Wine + Xvfb on the client node
+### Setting up Proton + Xvfb on the client node
 
-Needed on any client that'll run a `platform = "windows"` task through
-Wine (Ubuntu/Debian shown; adjust for other distros). This is normal
-system setup on the client, not something this driver installs or manages.
+Needed on any client that'll run a `platform = "windows"` task (Ubuntu/Debian
+shown; adjust for other distros). This is normal system setup on the client,
+not something this driver installs or manages.
 
 ```sh
 # 32-bit support -- almost certainly already enabled if you followed
 # steamcmd's own setup on this node, but harmless to repeat.
 sudo dpkg --add-architecture i386
 
-# WineHQ's own repo, rather than Ubuntu's bundled `wine` package, which
-# tends to lag behind. Key + repo setup:
-sudo mkdir -pm755 /etc/apt/keyrings
-sudo wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-sudo wget -NP /etc/apt/sources.list.d/ \
-  https://dl.winehq.org/wine-builds/ubuntu/dists/$(lsb_release -sc)/winehq-$(lsb_release -sc).sources
-
+# Xvfb, only needed for tasks that set windows_display = true.
 sudo apt update
-sudo apt install --install-recommends winehq-stable xvfb -y
+sudo apt install xvfb -y
+
+# Proton: unpack a release tarball somewhere stable (the driver never
+# downloads it), e.g. a GE-Proton release into /opt:
+#   sudo tar -xzf GE-Proton9-20.tar.gz -C /opt
+# then point proton_path / default_proton_path at /opt/GE-Proton9-20.
 ```
 
-**One-time Wine prefix setup, as whatever user Nomad actually runs
-tasks as** (root, in a typical homelab client config -- check yours).
-Skipping this means the *first* time a Nomad task tries to launch under
-Wine, Wine may try to pop up a Mono/Gecko installer dialog to initialize
-its prefix -- which will simply hang forever under Nomad, since there's
-no display/interaction to click through:
-
-```sh
-sudo WINEDLLOVERRIDES="mscoree,mshtml=" wineboot --init
-```
-
-`WINEDLLOVERRIDES="mscoree,mshtml="` disables the Mono (.NET) and Gecko
-(HTML rendering) components most dedicated servers don't need, avoiding
-their install prompts entirely rather than needing to click through them
-once interactively first. If a specific app's server *does* need one of
-these (check its own setup docs), drop the override for that component
-and initialize the prefix interactively once first instead.
-
-Verify before wiring it into a job spec:
-
-```sh
-sudo xvfb-run wine --version
-```
+Verify before wiring it into a job spec that the `proton` script is there and
+executable (`ls -l /opt/GE-Proton9-20/proton`). Proton creates its prefix on
+the first `proton run` (under `compat_data_path`), so there is no separate
+prefix-setup step.
 
 **Always use `--auto-servernum`, not the plain default, for any app that
 genuinely needs a virtual display.** `xvfb-run` defaults to a *fixed*
@@ -366,7 +340,7 @@ group on stop (not just the top-level wrapper -- see
 cleanup, but that's a different problem from the race window itself; only
 `--auto-servernum` actually closes it. The driver always passes
 `--auto-servernum` automatically when `windows_display = true` (see the
-Task config reference above) -- this only matters if you're testing Wine
+Task config reference above) -- this only matters if you're testing Proton
 manually outside of Nomad, or writing the raw wrapper yourself for some
 other reason:
 
@@ -376,7 +350,7 @@ other reason:
 # non-Steam binary through this driver's raw exec path).
 launch {
   command = "xvfb-run"
-  args    = ["--auto-servernum", "wine", "FoundryDedicatedServer.exe"]
+  args    = ["--auto-servernum", "/opt/GE-Proton9-20/proton", "run", "FoundryDedicatedServer.exe"]
 }
 ```
 
@@ -392,32 +366,6 @@ FOUNDRY (app `2915550`) that `-batchmode -nographics` alone, with
 window` -- Wine's window-driver check still needs *some* display to
 satisfy it, that flag just changes what the app itself does once one
 exists.
-
-**⚠️ Confirmed broken: `wine-stable 11.0.0.0~noble-1` (WineHQ's own
-package, as of writing) reliably fails with `wine: could not load
-kernel32.dll, status c0000135` on Ubuntu 24.04, even against a completely
-fresh prefix with correct architecture and a file-integrity-verified
-install.** This was isolated thoroughly before concluding it's the
-package itself: ruled out prefix corruption (fresh `wineboot --init`
-every time), architecture mismatch (confirmed `win64`), a
-mixed-Wine-source conflict (purged Ubuntu's own `wine64`/`libwine`
-packages, confirmed only WineHQ's remained), environment/wrapper-chain
-issues (identical failure with `sudo`/`xvfb-run` completely stripped
-away, `WINEPREFIX` set explicitly), and file corruption (`kernel32.dll`
-verified as a valid, correctly-sized `PE32+` DLL via `file`).
-**`wine-staging 11.15` does not have this problem** -- switching to it
-was what actually got FOUNDRY running. If `wine winecfg` (or any Wine
-invocation) fails with this exact error against `wine-stable`, don't
-keep debugging your own setup -- try `staging` instead:
-
-```sh
-sudo apt-get install --allow-downgrades winehq-staging
-which wine && wine --version   # confirm it's actually staging now
-```
-
-This is worth reporting to WineHQ directly if you hit it -- it's a
-genuine packaging/build issue, not a configuration problem, and this
-investigation already did the work to isolate it cleanly.
 
 Login fields are flat top-level attributes, not a nested `login {}` block.
 That's not a style choice -- a nested block here was found to decode
@@ -468,11 +416,8 @@ plugin "nomad-driver-steamcmd" {
     default_login_username       = ""
     default_login_password       = ""
     default_login_password_file  = ""
-    default_wine_prefix          = ""         # fleet-wide WINEPREFIX default;
-                                               # task-level wine_prefix overrides
-                                               # this if both are set
-    default_runner               = ""         # "wine" (default) | "proton"
-    default_proton_path          = ""         # fleet-wide Proton dir
+    default_proton_path          = ""         # fleet-wide Proton dir; a task's
+                                               # proton_path overrides it
   }
 }
 ```

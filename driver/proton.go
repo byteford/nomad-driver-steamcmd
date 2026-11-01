@@ -9,43 +9,16 @@ import (
 	"time"
 )
 
-const (
-	runnerWine   = "wine"
-	runnerProton = "proton"
-)
-
 // windowsRuntime describes how a platform="windows" launch command gets
-// executed on the Linux client: bare wine (the original behaviour, and the
-// zero value) or a Proton build.
+// executed on the Linux client: through a Proton build.
 //
 // Proton is Valve's pinned Wine fork. It is invoked as
-// `<proton_path>/proton run <exe> <args>` and ignores WINEPREFIX; it wants
-// STEAM_COMPAT_DATA_PATH (it creates `pfx/` underneath) and
-// STEAM_COMPAT_CLIENT_INSTALL_PATH instead.
+// `<proton_path>/proton run <exe> <args>` and wants STEAM_COMPAT_DATA_PATH (it
+// creates `pfx/` underneath) and STEAM_COMPAT_CLIENT_INSTALL_PATH.
 type windowsRuntime struct {
-	Runner         string // "wine" (or "" == wine) | "proton"
 	ProtonPath     string // proton dir (containing the `proton` script) or the script itself
 	CompatDataPath string // absolute; STEAM_COMPAT_DATA_PATH
 	ClientPath     string // absolute; STEAM_COMPAT_CLIENT_INSTALL_PATH
-	WinePrefix     string // wine runner only
-}
-
-func (w windowsRuntime) isProton() bool { return w.Runner == runnerProton }
-
-// resolveRunner applies task -> plugin -> "wine" precedence and validates.
-func resolveRunner(task, plugin string) (string, error) {
-	r := task
-	if r == "" {
-		r = plugin
-	}
-	switch r {
-	case "", runnerWine:
-		return runnerWine, nil
-	case runnerProton:
-		return runnerProton, nil
-	default:
-		return "", fmt.Errorf("invalid runner %q (must be \"wine\" or \"proton\")", r)
-	}
 }
 
 // protonScript returns the path to the `proton` script given either the
@@ -78,20 +51,12 @@ func protonWineserver(p string) string {
 // the task directory that relative paths resolve against. home is used to
 // find an existing Steam install for STEAM_COMPAT_CLIENT_INSTALL_PATH.
 func resolveWindowsRuntime(task TaskConfig, plugin PluginConfig, taskRoot, home string) (windowsRuntime, error) {
-	runner, err := resolveRunner(task.Runner, plugin.DefaultRunner)
-	if err != nil {
-		return windowsRuntime{}, err
-	}
-	if runner == runnerWine {
-		return windowsRuntime{Runner: runnerWine, WinePrefix: resolveWinePrefix(task.WinePrefix, plugin.DefaultWinePrefix)}, nil
-	}
-
 	protonPath := task.ProtonPath
 	if protonPath == "" {
 		protonPath = plugin.DefaultProtonPath
 	}
 	if protonPath == "" {
-		return windowsRuntime{}, fmt.Errorf("runner = \"proton\" requires proton_path (task) or default_proton_path (plugin)")
+		return windowsRuntime{}, fmt.Errorf("platform = \"windows\" requires proton_path (task) or default_proton_path (plugin)")
 	}
 	if !filepath.IsAbs(protonPath) {
 		return windowsRuntime{}, fmt.Errorf("proton_path %q must be absolute", protonPath)
@@ -109,7 +74,7 @@ func resolveWindowsRuntime(task TaskConfig, plugin PluginConfig, taskRoot, home 
 	if client == "" {
 		client = defaultSteamClientPath(home, compat)
 	}
-	return windowsRuntime{Runner: runnerProton, ProtonPath: protonPath, CompatDataPath: compat, ClientPath: client}, nil
+	return windowsRuntime{ProtonPath: protonPath, CompatDataPath: compat, ClientPath: client}, nil
 }
 
 // defaultSteamClientPath prefers an existing Steam install (~/.steam/steam,
@@ -125,11 +90,8 @@ func defaultSteamClientPath(home, fallback string) string {
 	return fallback
 }
 
-// validate checks the runtime's host-side prerequisites and prepares dirs.
+// prepare checks the runtime's host-side prerequisites and creates its dirs.
 func (w windowsRuntime) prepare() error {
-	if !w.isProton() {
-		return nil
-	}
 	script := protonScript(w.ProtonPath)
 	st, err := os.Stat(script)
 	if err != nil || st.IsDir() {
@@ -143,32 +105,23 @@ func (w windowsRuntime) prepare() error {
 
 // env returns the environment variables this runtime needs.
 func (w windowsRuntime) env(appID, installDir string) []string {
-	if w.isProton() {
-		e := []string{
-			"STEAM_COMPAT_DATA_PATH=" + w.CompatDataPath,
-			"STEAM_COMPAT_CLIENT_INSTALL_PATH=" + w.ClientPath,
-			"STEAM_COMPAT_INSTALL_PATH=" + installDir,
-		}
-		if appID != "" {
-			e = append(e, "SteamAppId="+appID, "SteamGameId="+appID)
-		}
-		return e
+	e := []string{
+		"STEAM_COMPAT_DATA_PATH=" + w.CompatDataPath,
+		"STEAM_COMPAT_CLIENT_INSTALL_PATH=" + w.ClientPath,
+		"STEAM_COMPAT_INSTALL_PATH=" + installDir,
 	}
-	if w.WinePrefix != "" {
-		return []string{"WINEPREFIX=" + w.WinePrefix}
+	if appID != "" {
+		e = append(e, "SteamAppId="+appID, "SteamGameId="+appID)
 	}
-	return nil
+	return e
 }
 
 // executable is the program that runs the .exe, plus any fixed leading args.
 func (w windowsRuntime) executable() (string, []string) {
-	if w.isProton() {
-		return protonScript(w.ProtonPath), []string{"run"}
-	}
-	return "wine", nil
+	return protonScript(w.ProtonPath), []string{"run"}
 }
 
-// wineCleanup is what's needed to kill a prefix's leftover wineserver after
+// wineCleanup is what's needed to kill a Proton prefix's leftover wineserver after
 // the task's process group is gone. It's persisted in taskState so it
 // survives driver/client restarts.
 type wineCleanup struct {
@@ -176,20 +129,14 @@ type wineCleanup struct {
 	Env []string
 }
 
-// cleanup returns nil when there is nothing to clean up.
+// cleanup returns nil when there is nothing to clean up (no wineserver found
+// in the Proton build).
 func (w windowsRuntime) cleanup() *wineCleanup {
-	if w.isProton() {
-		bin := protonWineserver(w.ProtonPath)
-		if bin == "" {
-			return nil
-		}
-		return &wineCleanup{Bin: bin, Env: []string{"WINEPREFIX=" + filepath.Join(w.CompatDataPath, "pfx")}}
+	bin := protonWineserver(w.ProtonPath)
+	if bin == "" {
+		return nil
 	}
-	c := &wineCleanup{Bin: "wineserver"}
-	if w.WinePrefix != "" {
-		c.Env = []string{"WINEPREFIX=" + w.WinePrefix}
-	}
-	return c
+	return &wineCleanup{Bin: bin, Env: []string{"WINEPREFIX=" + filepath.Join(w.CompatDataPath, "pfx")}}
 }
 
 // run executes `wineserver -k`. wineserver daemonizes, so it routinely
