@@ -62,11 +62,18 @@ $(cat "$E2E_DIR/server.py")
 PYEOF
       }
 
+      # A private file: staging must keep its 0600 mode (checked below).
+      template {
+        destination = "local/secret.cfg"
+        perms       = "0600"
+        data        = "token=not-a-real-secret"
+      }
+
       config {
         app_id          = "$APP_ID"
         install_dir     = "$INSTALL"
         update_on_start = false
-        config_files    = { "local/server.py" = "server.py" }
+        config_files    = { "local/server.py" = "server.py", "local/secret.cfg" = "secret.cfg" }
 
         launch {
           command = "python3"
@@ -97,6 +104,10 @@ wait_for "server answers on udp/$PORT" 30 udp_query "$PORT" 70696e67 ||
 nomad alloc logs "$ALLOC" "$TASK" | grep -q "server listening" ||
   fail "server stdout did not reach nomad alloc logs"
 [ -s "$INSTALL/server.py" ] || fail "config_files did not stage server.py into install_dir"
+[ -s "$INSTALL/secret.cfg" ] || fail "config_files did not stage secret.cfg into install_dir"
+# The source is rendered 0600; staging must not widen it to 0644.
+[ "$(stat -c %a "$INSTALL/secret.cfg")" = 600 ] ||
+  fail "staged secret.cfg is mode $(stat -c %a "$INSTALL/secret.cfg"), expected 600 (the source's mode)"
 PID1=$(cat "$INSTALL/server.pid")
 echo "server up, pid $PID1"
 
