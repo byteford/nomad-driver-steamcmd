@@ -113,6 +113,9 @@ type TaskConfig struct {
 	UpdateOnStart     bool                `codec:"update_on_start"`
 	InstallTimeout    string              `codec:"install_timeout"`
 	RepairManifest    bool                `codec:"repair_stale_manifest"`
+	ReadyPort         int                 `codec:"ready_port"`
+	ReadyProtocol     string              `codec:"ready_protocol"`
+	ReadyTimeout      string              `codec:"ready_timeout"`
 }
 
 // Login builds a LoginConfig from the task's flat login_* fields.
@@ -234,6 +237,18 @@ var taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 	"follow_logs": hclspec.NewDefault(
 		hclspec.NewAttr("follow_logs", "list(string)", false),
 		hclspec.NewLiteral("[]"),
+	),
+	"ready_port": hclspec.NewDefault(
+		hclspec.NewAttr("ready_port", "number", false),
+		hclspec.NewLiteral("0"),
+	),
+	"ready_protocol": hclspec.NewDefault(
+		hclspec.NewAttr("ready_protocol", "string", false),
+		hclspec.NewLiteral(`""`),
+	),
+	"ready_timeout": hclspec.NewDefault(
+		hclspec.NewAttr("ready_timeout", "string", false),
+		hclspec.NewLiteral(`""`),
 	),
 	"launch": hclspec.NewBlock("launch", false, launchSpec),
 })

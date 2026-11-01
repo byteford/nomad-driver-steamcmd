@@ -193,4 +193,96 @@ grep -q "saved on SIGQUIT" "$QINSTALL/save.txt" 2>/dev/null ||
   { dump_alloc "$QALLOC" "$TASK"; fail "server was not given SIGQUIT (save file: $(cat "$QINSTALL/save.txt" 2>/dev/null || echo none))"; }
 trap cleanup EXIT
 
+echo "== ready_port: a server that never opens its port is killed and restarted; a healthy one is left alone =="
+# HJOB runs `sleep 301`, which never listens on udp/27097. With ready_timeout=8s
+# the driver must kill it, exit non-zero, and let Nomad's restart policy retry
+# (attempts=1, then the task fails for good). Without the check it would sit
+# "running" forever.
+HJOB="$JOB-hung"
+HINSTALL="$GAME_ROOT/install-hung"
+HPORT=27097
+RJOB="$JOB-ready"
+RINSTALL="$GAME_ROOT/install-ready"
+RPORT=27096
+trap 'cleanup; nomad job stop -purge -detach "$HJOB" >/dev/null 2>&1 || true; nomad job stop -purge -detach "$RJOB" >/dev/null 2>&1 || true' EXIT
+mkdir -p "$HINSTALL/steamapps"
+cp "$INSTALL/steamapps/appmanifest_${APP_ID}.acf" "$HINSTALL/steamapps/"
+chmod -R a+rwX "$HINSTALL"
+cat >"$GAME_ROOT/job-hung.nomad.hcl" <<HUNGEOF
+job "$HJOB" {
+  datacenters = ["dc1"]
+  type        = "service"
+
+  group "game" {
+    restart {
+      attempts = 1
+      interval = "5m"
+      delay    = "1s"
+      mode     = "fail"
+    }
+
+    task "$TASK" {
+      driver = "steamcmd"
+
+      config {
+        app_id          = "$APP_ID"
+        install_dir     = "$HINSTALL"
+        update_on_start = false
+        ready_port      = $HPORT
+        ready_protocol  = "udp"
+        ready_timeout   = "8s"
+
+        launch {
+          command = "sleep"
+          args    = ["301"]
+        }
+      }
+
+      resources {
+        cpu    = 100
+        memory = 64
+      }
+    }
+  }
+}
+HUNGEOF
+nomad job run -detach "$GAME_ROOT/job-hung.nomad.hcl"
+have_halloc() { [ -n "$(latest_alloc "$HJOB")" ]; }
+wait_for "hung-server allocation exists" 30 have_halloc
+HALLOC=$(latest_alloc "$HJOB")
+hdead() { [ "$(task_field "$HALLOC" "$TASK" State)" = dead ]; }
+wait_for "hung server is killed, restarted once, then fails" 120 hdead || { dump_alloc "$HALLOC" "$TASK"; exit 1; }
+[ "$(task_field "$HALLOC" "$TASK" Failed)" = True ] ||
+  { dump_alloc "$HALLOC" "$TASK"; fail "a server that never opened its port ended without failing"; }
+[ "$(task_field "$HALLOC" "$TASK" Restarts)" -ge 1 ] ||
+  { dump_alloc "$HALLOC" "$TASK"; fail "Nomad did not restart the server that never became ready"; }
+task_events "$HALLOC" "$TASK" | grep -q "not listening" ||
+  { dump_alloc "$HALLOC" "$TASK"; fail "exit reason does not mention the port that never opened"; }
+if pgrep -f '^sleep 301$' >/dev/null; then fail "the hung server's process survived the not-ready kill"; fi
+nomad job stop -purge -detach "$HJOB" >/dev/null
+
+# RJOB is the normal stand-in server with the same check and a short deadline.
+# It opens its port at once, so it must still be running, with no restarts,
+# well after the deadline has passed.
+mkdir -p "$RINSTALL/steamapps"
+cp "$INSTALL/steamapps/appmanifest_${APP_ID}.acf" "$RINSTALL/steamapps/"
+chmod -R a+rwX "$RINSTALL"
+sed -e "s/^job \"$JOB\"/job \"$RJOB\"/" -e "s#$INSTALL#$RINSTALL#" -e "s/\"$PORT\"/\"$RPORT\"/" \
+  -e "s/^        update_on_start = false/        update_on_start = false\n        ready_port      = $RPORT\n        ready_protocol  = \"udp\"\n        ready_timeout   = \"6s\"/" \
+  "$GAME_ROOT/job.nomad.hcl" >"$GAME_ROOT/job-ready.nomad.hcl"
+grep -q "ready_port      = $RPORT" "$GAME_ROOT/job-ready.nomad.hcl" || fail "test bug: ready_port job was not generated"
+nomad job run -detach "$GAME_ROOT/job-ready.nomad.hcl"
+have_ralloc() { [ -n "$(latest_alloc "$RJOB")" ]; }
+wait_for "ready-check allocation exists" 30 have_ralloc
+RALLOC=$(latest_alloc "$RJOB")
+rrunning() { [ "$(task_field "$RALLOC" "$TASK" State)" = running ]; }
+wait_for "ready-check task running" 60 rrunning || { dump_alloc "$RALLOC" "$TASK"; exit 1; }
+wait_for "ready-check server answers on udp/$RPORT" 30 udp_query "$RPORT" 70696e67 ||
+  { dump_alloc "$RALLOC" "$TASK"; exit 1; }
+sleep 12
+[ "$(task_field "$RALLOC" "$TASK" State)" = running ] && [ "$(task_field "$RALLOC" "$TASK" Restarts)" = 0 ] ||
+  { dump_alloc "$RALLOC" "$TASK"; fail "a healthy server with ready_port was killed or restarted"; }
+nomad job stop -purge -detach "$RJOB" >/dev/null
+trap cleanup EXIT
+
 echo "PASS: game server started, served, restarted after a crash, saved and exited on stop"

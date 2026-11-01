@@ -60,6 +60,7 @@ type taskHandle struct {
 	completedAt time.Time
 	exitCode    int
 	signal      int
+	notReady    error
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
