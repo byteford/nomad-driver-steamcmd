@@ -32,6 +32,23 @@ func installDirPopulated(dir string) bool {
 	return len(entries) > 0
 }
 
+// parseInstallTimeout parses the install_timeout task option. Empty means no
+// timeout (0). Anything else must be a positive Go duration: a typo such as
+// "20 m" used to be ignored silently, leaving the install unbounded.
+func parseInstallTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid install_timeout %q: %w", s, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid install_timeout %q: must be a positive duration", s)
+	}
+	return d, nil
+}
+
 // taskHandleVersion is passed to drivers.NewTaskHandle so Nomad can detect
 // (and this driver could, in principle, special-case) handles created by
 // an older/incompatible version of this driver during recovery. Bump this
@@ -123,6 +140,10 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	if taskCfg.InstallDir == "" {
 		taskCfg.InstallDir = "local/steamapp"
 	}
+	installTimeout, terr := parseInstallTimeout(taskCfg.InstallTimeout)
+	if terr != nil {
+		return nil, nil, terr
+	}
 
 	// Expose volume_mount destinations (CSI / host volumes) inside the task
 	// dir; see setupMounts for why the driver has to do this itself.
@@ -210,12 +231,10 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		}
 
 		installCtx := h.ctx
-		if taskCfg.InstallTimeout != "" {
-			if dur, perr := time.ParseDuration(taskCfg.InstallTimeout); perr == nil {
-				var cancel context.CancelFunc
-				installCtx, cancel = context.WithTimeout(h.ctx, dur)
-				defer cancel()
-			}
+		if installTimeout > 0 {
+			var cancel context.CancelFunc
+			installCtx, cancel = context.WithTimeout(h.ctx, installTimeout)
+			defer cancel()
 		}
 
 		release := d.acquireInstallSlot(installCtx)
