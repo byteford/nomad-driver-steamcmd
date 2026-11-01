@@ -137,7 +137,9 @@ func (d *Driver) Capabilities() (*drivers.Capabilities, error) {
 // is only eligible to schedule steamcmd tasks if the binary is present and
 // executable -- this is what lets job specs rely on the scheduler placing
 // work only where steamcmd actually exists, rather than failing at
-// StartTask time.
+// StartTask time. It deliberately does not run steamcmd: that happens every
+// fingerprintPeriod, can trigger a steamcmd self-update, and can collide with
+// a real install using the same ~/Steam.
 func (d *Driver) Fingerprint(ctx context.Context) (<-chan *drivers.Fingerprint, error) {
 	ch := make(chan *drivers.Fingerprint)
 	go d.handleFingerprint(ctx, ch)
@@ -170,20 +172,9 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 		}
 	}
 
-	probeCtx, cancel := context.WithTimeout(d.ctx, 15*time.Second)
-	defer cancel()
-	out, verErr := exec.CommandContext(probeCtx, binPath, "+quit").CombinedOutput()
 	attrs := map[string]*pstructs.Attribute{
 		"driver.steamcmd":      pstructs.NewBoolAttribute(true),
 		"driver.steamcmd.path": pstructs.NewStringAttribute(binPath),
-	}
-	if verErr != nil {
-		d.logger.Warn("steamcmd version probe failed, marking unhealthy", "error", verErr, "output", string(out))
-		return &drivers.Fingerprint{
-			Attributes:        attrs,
-			Health:            drivers.HealthStateUnhealthy,
-			HealthDescription: fmt.Sprintf("steamcmd probe failed: %v", verErr),
-		}
 	}
 
 	return &drivers.Fingerprint{
