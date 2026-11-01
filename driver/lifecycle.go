@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,16 +21,34 @@ import (
 // a clear task event beats a mysterious hang.
 const minFreeBytes = 512 * 1024 * 1024 // 512MB
 
-// installDirPopulated is a cheap heuristic for "has steamcmd already put
-// something here" -- used to decide whether update_on_start=false should
-// actually skip the steamcmd pass, versus a genuinely first-ever start
-// where skipping would leave nothing to launch.
-func installDirPopulated(dir string) bool {
-	entries, err := os.ReadDir(dir)
+// reStateFlags pulls StateFlags out of a steamapps/appmanifest_<id>.acf.
+var reStateFlags = regexp.MustCompile(`"StateFlags"\s+"(\d+)"`)
+
+// stateFullyInstalled is the "fully installed" bit of an appmanifest's
+// StateFlags. An app that is installed but needs an update has it set too
+// (flags 6), while an interrupted download (flags 1026) does not.
+const stateFullyInstalled = 4
+
+// appInstalled reports whether steamcmd has previously completed an install
+// of appID into installDir, judged by its appmanifest. It decides whether
+// update_on_start=false may skip steamcmd: merely finding files in
+// installDir is not enough, since a failed or interrupted first install
+// leaves a steamapps/ directory behind, and skipping steamcmd then would try
+// to launch an app that is not there.
+func appInstalled(installDir, appID string) bool {
+	if !reAppID.MatchString(appID) {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(installDir, "steamapps", "appmanifest_"+appID+".acf"))
 	if err != nil {
 		return false
 	}
-	return len(entries) > 0
+	m := reStateFlags.FindSubmatch(b)
+	if m == nil {
+		return false
+	}
+	flags, err := strconv.ParseUint(string(m[1]), 10, 32)
+	return err == nil && flags&stateFullyInstalled != 0
 }
 
 // parseInstallTimeout parses the install_timeout task option. Empty means no
@@ -215,14 +234,15 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	}
 
 	// If update_on_start is false and this looks like a re-launch of an
-	// already-installed app (a launch phase is configured and installDir
-	// already has content), skip re-invoking steamcmd entirely rather than
-	// silently updating on every restart regardless of the flag.
-	skipInstall := !taskCfg.UpdateOnStart && taskCfg.Launch != nil && installDirPopulated(installDir)
+	// already-installed app (a launch phase is configured and steamcmd's
+	// manifest says the app is installed), skip re-invoking steamcmd
+	// entirely rather than silently updating on every restart regardless of
+	// the flag.
+	skipInstall := !taskCfg.UpdateOnStart && taskCfg.Launch != nil && appInstalled(installDir, taskCfg.AppID)
 
 	if skipInstall {
 		d.eventer.EmitEvent(&drivers.TaskEvent{TaskID: cfg.ID, TaskName: cfg.Name, Timestamp: time.Now(),
-			Message: "update_on_start is false and install_dir is already populated; skipping steamcmd"})
+			Message: "update_on_start is false and the app is already installed; skipping steamcmd"})
 	} else {
 		args, err := buildArgs(taskCfg, login, installDir)
 		if err != nil {
