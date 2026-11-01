@@ -83,6 +83,34 @@ PYEOF
 }
 EOF
 
+echo "== app not installed -> steamcmd must run, server must not be launched =="
+# update_on_start=false only skips steamcmd for a fully installed app. Here
+# install_dir holds a leftover steamapps/ directory but no manifest, which used
+# to count as "installed": the driver skipped steamcmd and launched a server
+# from a half-empty directory. Now it must run steamcmd, which cannot install
+# this made-up app, so the task must fail without ever starting the server.
+NJOB="$JOB-nomanifest"
+NINSTALL="$GAME_ROOT/install-nomanifest"
+trap 'cleanup; nomad job stop -purge -detach "$NJOB" >/dev/null 2>&1 || true' EXIT
+mkdir -p "$NINSTALL/steamapps"
+chmod -R a+rwX "$NINSTALL"
+sed -e "s/^job \"$JOB\"/job \"$NJOB\"/" -e "s#$INSTALL#$NINSTALL#" \
+  "$GAME_ROOT/job.nomad.hcl" >"$GAME_ROOT/job-nomanifest.nomad.hcl"
+nomad job run -detach "$GAME_ROOT/job-nomanifest.nomad.hcl"
+have_nalloc() { [ -n "$(latest_alloc "$NJOB")" ]; }
+wait_for "no-manifest allocation exists" 30 have_nalloc
+NALLOC=$(latest_alloc "$NJOB")
+# Running is the failure we are guarding against; dead (failed) is the pass.
+ndead() { s=$(task_field "$NALLOC" "$TASK" State); [ "$s" = dead ] || [ "$s" = running ]; }
+wait_for "no-manifest task settles" 240 ndead || { dump_alloc "$NALLOC" "$TASK"; exit 1; }
+[ "$(task_field "$NALLOC" "$TASK" State)" = dead ] ||
+  { dump_alloc "$NALLOC" "$TASK"; fail "task launched the server without an installed app manifest (steamcmd was skipped)"; }
+[ "$(task_field "$NALLOC" "$TASK" Failed)" = True ] ||
+  { dump_alloc "$NALLOC" "$TASK"; fail "no-manifest task ended without failing"; }
+[ ! -e "$NINSTALL/server.pid" ] || fail "server ran even though the app was not installed"
+nomad job stop -purge -detach "$NJOB" >/dev/null
+trap cleanup EXIT
+
 echo "== start =="
 nomad job run -detach "$GAME_ROOT/job.nomad.hcl"
 have_alloc() { [ -n "$(latest_alloc "$JOB")" ]; }
