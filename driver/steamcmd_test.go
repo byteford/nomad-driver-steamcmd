@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -345,4 +346,32 @@ exit 0`)
 	require.Equal(t, []string{manifest}, repaired)
 	require.NoFileExists(t, manifest)
 	require.FileExists(t, save)
+}
+
+// A single output line longer than the scanner's 1MB limit used to stop the
+// scanner; with nothing draining the pipe, steamcmd then blocked on its next
+// write and runInstall never returned.
+func TestRunInstall_OverlongLineDoesNotHang(t *testing.T) {
+	bin := fakeSteamcmd(t, `head -c 2000000 /dev/zero | tr '\0' 'x'
+echo
+echo "Success! App '2394010' fully installed."
+exit 0`)
+	var stdout, stderr bytes.Buffer
+
+	type out struct {
+		res *installResult
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		res, err := runInstall(context.Background(), bin, []string{"+quit"}, &stdout, &stderr, nil)
+		done <- out{res, err}
+	}()
+	select {
+	case o := <-done:
+		require.NoError(t, o.err)
+		require.True(t, o.res.Success)
+	case <-time.After(20 * time.Second):
+		t.Fatal("runInstall hung on an overlong output line")
+	}
 }
