@@ -122,4 +122,36 @@ grep -q "saved on SIGINT" "$INSTALL/save.txt" 2>/dev/null ||
 if kill -0 "$PID2" 2>/dev/null; then fail "server process $PID2 still alive after the job was stopped"; fi
 if udp_query "$PORT" 70696e67 >/dev/null; then fail "udp/$PORT still answers after stop"; fi
 
+echo "== kill_signal SIGQUIT reaches the server (not downgraded to SIGTERM) =="
+# Same job on its own install_dir/port with kill_signal = SIGQUIT. The driver
+# used to reject SIGQUIT and silently send SIGTERM, so the server's save file
+# would say SIGTERM.
+QJOB="$JOB-quit"
+QINSTALL="$GAME_ROOT/install-quit"
+QPORT=27098
+trap 'cleanup; nomad job stop -purge -detach "$QJOB" >/dev/null 2>&1 || true' EXIT
+mkdir -p "$QINSTALL/steamapps"
+cp "$INSTALL/steamapps/appmanifest_${APP_ID}.acf" "$QINSTALL/steamapps/"
+chmod -R a+rwX "$QINSTALL"
+sed -e "s/^job \"$JOB\"/job \"$QJOB\"/" \
+  -e "s#$INSTALL#$QINSTALL#" \
+  -e 's/kill_signal  = "SIGINT"/kill_signal  = "SIGQUIT"/' \
+  -e "s/\"$PORT\"/\"$QPORT\"/" \
+  "$GAME_ROOT/job.nomad.hcl" >"$GAME_ROOT/job-quit.nomad.hcl"
+grep -q 'kill_signal  = "SIGQUIT"' "$GAME_ROOT/job-quit.nomad.hcl" || fail "test bug: SIGQUIT job was not generated"
+nomad job run -detach "$GAME_ROOT/job-quit.nomad.hcl"
+have_qalloc() { [ -n "$(latest_alloc "$QJOB")" ]; }
+wait_for "SIGQUIT allocation exists" 30 have_qalloc
+QALLOC=$(latest_alloc "$QJOB")
+qrunning() { [ "$(task_field "$QALLOC" "$TASK" State)" = running ]; }
+wait_for "SIGQUIT task running" 60 qrunning || { dump_alloc "$QALLOC" "$TASK"; exit 1; }
+wait_for "SIGQUIT server answers on udp/$QPORT" 30 udp_query "$QPORT" 70696e67 ||
+  { dump_alloc "$QALLOC" "$TASK"; exit 1; }
+nomad job stop -detach "$QJOB"
+qstopped() { [ "$(api "allocation/$QALLOC" | python3 -c 'import sys,json;print(json.load(sys.stdin)["ClientStatus"])')" = complete ]; }
+wait_for "SIGQUIT allocation complete" 60 qstopped || { dump_alloc "$QALLOC" "$TASK"; exit 1; }
+grep -q "saved on SIGQUIT" "$QINSTALL/save.txt" 2>/dev/null ||
+  { dump_alloc "$QALLOC" "$TASK"; fail "server was not given SIGQUIT (save file: $(cat "$QINSTALL/save.txt" 2>/dev/null || echo none))"; }
+trap cleanup EXIT
+
 echo "PASS: game server started, served, restarted after a crash, saved and exited on stop"

@@ -3,7 +3,7 @@
 
 Behaves like the parts of a real dedicated server the driver has to get right:
 listens on a UDP port and answers queries, logs to stdout, records its pid, and
-on SIGINT/SIGTERM writes a "save" file before exiting 0 (a server that is
+on SIGINT/SIGTERM/SIGQUIT writes a "save" file before exiting 0 (a server that is
 killed before it can save is the failure that matters in production).
 
 Usage: server.py [port]   (default 27099). Files go in the current directory,
@@ -27,6 +27,7 @@ def save_and_exit(signum, _frame):
 
 signal.signal(signal.SIGINT, save_and_exit)
 signal.signal(signal.SIGTERM, save_and_exit)
+signal.signal(signal.SIGQUIT, save_and_exit)
 
 with open(os.path.join(game_dir, "server.pid"), "w") as f:
     f.write(str(os.getpid()))
