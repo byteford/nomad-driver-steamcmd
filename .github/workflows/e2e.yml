@@ -21,7 +21,7 @@ env:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -189,6 +189,23 @@ jobs:
           done
           if [ "$status" != "true" ]; then
             echo "::error::steamcmd driver never reported healthy"
+            cat /tmp/nomad.log
+            exit 1
+          fi
+
+          # A healthy driver does not mean the node is schedulable yet: a job
+          # submitted while the node is still "initializing" fails with "No
+          # nodes were eligible for evaluation" (seen on a CI run).
+          for i in $(seq 1 30); do
+            node=$(curl -s http://127.0.0.1:4646/v1/nodes | jq -r '.[0] | "\(.Status)/\(.SchedulingEligibility)"')
+            echo "node: $node"
+            if [ "$node" = "ready/eligible" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ "$node" != "ready/eligible" ]; then
+            echo "::error::node never became ready and eligible (last: $node)"
             cat /tmp/nomad.log
             exit 1
           fi
@@ -523,6 +540,23 @@ jobs:
           echo "task still running post-restart with same allocation -- RecoverTask reattach OK"
 
           nomad job stop -purge "$job_id" || true
+
+      - name: Game server lifecycle (stand-in server, no Steam)
+        # Starts, queries, crashes (Nomad must restart it), then stops a
+        # stand-in server through the full Nomad -> driver path. See
+        # e2e/gameserver-fake.sh.
+        run: bash e2e/gameserver-fake.sh
+
+      - name: Real game server starts and answers a query (HLDS, app 90)
+        # Real steamcmd install, then the real server binary through the
+        # driver, proven by a UDP A2S_INFO reply. See e2e/gameserver-hlds.sh.
+        run: bash e2e/gameserver-hlds.sh
+
+      - name: Windows server starts under real Proton (GE-Proton, no Steam)
+        # Downloads a pinned GE-Proton (sha512-checked against the release's
+        # own checksum file), cross-compiles a tiny Windows server and runs it
+        # with platform=windows / runner=proton. See e2e/gameserver-proton.sh.
+        run: bash e2e/gameserver-proton.sh
 
       - name: Collect logs
         if: always()
