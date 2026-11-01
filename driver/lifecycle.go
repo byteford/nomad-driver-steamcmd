@@ -163,6 +163,10 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	if terr != nil {
 		return nil, nil, terr
 	}
+	ready, rerr := parseReadyCheck(taskCfg)
+	if rerr != nil {
+		return nil, nil, rerr
+	}
 
 	// Expose volume_mount destinations (CSI / host volumes) inside the task
 	// dir; see setupMounts for why the driver has to do this itself.
@@ -402,6 +406,12 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	// Many game servers log only to a file; stream those into the task's stdout.
 	stopFollow := d.startLogFollowers(cfg, followPaths, staleLogs)
 
+	// Optional: kill the task if its server never opens its port, so a hung
+	// start is restarted by Nomad instead of sitting "healthy" forever.
+	if ready != nil {
+		go d.watchReady(h, cfg, *ready)
+	}
+
 	// The launched process is long-running by design (a game server);
 	// StartTask must not block on it. Supervise it in the background --
 	// closeLogs is deferred here rather than in the outer StartTask defer
@@ -415,15 +425,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		h.stateLock.Lock()
 		h.completedAt = time.Now()
 		h.procState = drivers.TaskStateExited
-		if waitErr != nil {
-			if exitErr, ok := waitErr.(*exec.ExitError); ok {
-				h.exitResult = &drivers.ExitResult{ExitCode: exitErr.ExitCode()}
-			} else {
-				h.exitResult = &drivers.ExitResult{ExitCode: -1, Err: waitErr}
-			}
-		} else {
-			h.exitResult = &drivers.ExitResult{ExitCode: 0}
-		}
+		h.exitResult = finalExitResult(waitErr, h.notReady)
 		h.stateLock.Unlock()
 		h.setPhase(phaseExited)
 		close(h.doneCh)

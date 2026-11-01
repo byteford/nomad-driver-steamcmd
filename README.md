@@ -104,6 +104,9 @@ config {
   update_on_start = true             # re-run steamcmd before every launch
   install_timeout = "20m"            # optional, positive Go duration; an invalid value fails the start
   repair_stale_manifest = false      # see "Stale app manifest" below
+  ready_port     = 0                 # optional; see "Restarting a server that never opens its port"
+  ready_protocol = ""                # "tcp" or "udp"; required when ready_port is set
+  ready_timeout  = "5m"              # positive Go duration; default shown
 
   # Proton (platform="windows" only) -- see "Running Windows servers under Proton" below.
   proton_path        = ""   # Proton dir (contains `proton`); required unless default_proton_path is set
@@ -276,6 +279,34 @@ new lines to the task's stdout, so `nomad alloc logs -f <alloc>` and the UI show
 - Limitations: it is not re-attached for a task recovered after the *plugin process* itself
   restarts (the log file is still written, just not streamed until the next start), and an
   in-place rewrite that is already as long as before by the next poll cannot be told from an append.
+
+### Restarting a server that never opens its port (`ready_port`)
+
+A launched server can be alive but never come up (a hung Wine/Proton start, for example): Nomad
+still reports the task as running and healthy. Set the port the game listens on and the driver
+checks it:
+
+```hcl
+ready_port     = 15637
+ready_protocol = "udp"   # or "tcp"
+ready_timeout  = "5m"    # optional, default 5m
+```
+
+- After launch, the driver looks every 2 s for a socket on that port held by one of the task's
+  own processes (a different process holding the port does not count). TCP counts only listening
+  sockets; for UDP any socket bound to the port counts, since UDP has no handshake to probe.
+- Once found, it emits a `ready` task event and stops checking. It does not watch the server
+  afterwards.
+- If `ready_timeout` passes first, the driver kills every process of the task (SIGKILL, then the
+  Proton `wineserver`/`Xvfb` helpers) and the task exits non-zero with the reason, so the job's
+  `restart` stanza applies. Choose a timeout longer than a normal start, including the first
+  start's Proton prefix build; a timeout that is too short restarts a healthy start in a loop.
+- Not set (the default) means no check, so existing jobs behave as before. `ready_protocol` and
+  `ready_timeout` without `ready_port`, `ready_port` without a `launch` block, or an invalid
+  value fail the task at start.
+- A task re-adopted after the plugin process restarts is not checked.
+- If the driver cannot list a task process's file descriptors (it is not root and the game runs
+  as another user), it cannot tell whose socket it is and accepts any socket on the port.
 
 ### Separating install from run (prestart tasks)
 
