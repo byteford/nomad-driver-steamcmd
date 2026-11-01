@@ -161,6 +161,11 @@ func runInstall(ctx context.Context, steamCmdPath string, args []string, stdout,
 	cmd.Stdout = io.MultiWriter(pw, stdout)
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// steamcmd.sh runs the real binary as a child. The default cancel only
+	// kills the top-level process, leaving that child running (and holding
+	// the output pipe open) after install_timeout or a task kill, so kill the
+	// whole process group instead.
+	cmd.Cancel = func() error { return signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL) }
 
 	result := &installResult{}
 	var lastProgress time.Time
